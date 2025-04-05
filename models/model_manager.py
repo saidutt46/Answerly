@@ -5,6 +5,13 @@ import os
 import time
 import logging
 from typing import Dict, Any, List, Optional, Tuple
+
+from setup_platform import configure_environment
+
+# Configure platform-specific settings
+platform_info = configure_environment()
+device_name = platform_info["device"]
+
 import torch
 from transformers import (
     AutoModelForQuestionAnswering, 
@@ -24,6 +31,9 @@ class ModelManager:
         self.tokenizers = {}
         self.pipelines = {}
         self.model_info = {}
+        self.device = device_name
+
+        logger.info(f"Model manager initialized with device: {self.device}")
         
         # Load model metadata
         self._load_model_metadata()
@@ -78,10 +88,15 @@ class ModelManager:
         logger.info(f"Loading model: {model_id}")
         
         try:
-            # Set up device
-            device = 0 if torch.cuda.is_available() and settings.USE_GPU else -1
-            device_name = f"CUDA:{device}" if device >= 0 else "CPU"
-            logger.info(f"Using device: {device_name}")
+            # Set up device based on platform detection
+            if self.device == "cuda":
+                device = 0  # First CUDA device
+            elif self.device == "mps":
+                device = "mps"  # Apple Metal
+            else:
+                device = -1  # CPU
+                
+            logger.info(f"Using device: {self.device}")
             
             # Load from cache directory if specified
             cache_dir = settings.MODEL_CACHE_DIR
@@ -90,7 +105,7 @@ class ModelManager:
             tokenizer = AutoTokenizer.from_pretrained(model_id, cache_dir=cache_dir)
             model = AutoModelForQuestionAnswering.from_pretrained(model_id, cache_dir=cache_dir)
             
-            # Create pipeline
+            # Create pipeline with appropriate device
             qa_pipeline = pipeline(
                 "question-answering",
                 model=model,
@@ -111,6 +126,12 @@ class ModelManager:
             
         except Exception as e:
             logger.error(f"Error loading model {model_id}: {e}")
+            
+            # For M1 Mac with NumPy issues, provide more specific error
+            if "NumPy is not available" in str(e):
+                logger.error("NumPy compatibility issue detected with PyTorch.")
+                logger.error("Try running: pip install numpy==1.24.3")
+                
             raise RuntimeError(f"Failed to load model {model_id}: {e}")
 
     def answer_question(self, question: str, context: str, model_name: str = None) -> Dict[str, Any]:
